@@ -31,7 +31,7 @@ acceptable_status = ('optimal', 'time_limit')
 # create directories to store generated files
 final_dir = os.path.join("final", "")
 snapshot_dir = os.path.join("snapshots", "")
-if "SCRATCH" in os.environ:  # snapshots go in $SCRATCH if it exists
+if False: # "SCRATCH" in os.environ:  # snapshots go in $SCRATCH if it exists
     snapshot_dir = os.join(os.environ["SCRATCH"], "snapshots", "")
 
 def make_directories():
@@ -91,7 +91,7 @@ def null(S, max_error=default_max_error * 1e-3, rank_cutoff=default_rank_eps):
     null_mask = ones((n,))
     rank = sum(sigma > rank_cutoff)  # use this instead of matrix_rank
     null_mask[:rank] = 0
-    
+
     N = compress(null_mask, v, axis=0).T
     #assert rank < n
     if rank >= n:
@@ -517,10 +517,68 @@ def minspan(model, starting_fluxes=None, coverage=10, cores=4, processes="auto",
     return fluxes
 
 
+def add_pool_reaction(model, reaction_id, metabolite_dict, copy=True):
+    """
+
+    Arguments
+    ---------
+
+    model: COBRA models
+
+    reaction_id: ID for the pool reaction
+
+    metabolite_dict: A dictionary of metabolite IDs and coefficients for the pool reaction.
+
+    copy: If True, the copy the model before changing it.
+
+    """
+    if copy:
+        model = model.copy()
+    pool_reaction = cobra.core.Reaction(reaction_id)
+    pool_reaction.add_metabolites({
+        model.metabolites.get_by_id(k): v for k, v in metabolite_dict.iteritems()
+    })
+    pool_reaction.lower_bound, pool_reaction.upper_bound = (-1000, 1000)
+    model.add_reaction(pool_reaction)
+    return model
+
+
 if __name__ == "__main__":
     from cobra.io import load_matlab_model
     from time import time
-    model = load_matlab_model("testing_models.mat", "ecoli_core")
+    model = load_matlab_model("testing_models.mat", "ecoli_core") # nnz 479 rank 23 avg 20.8
+    model.reactions.ATPM.remove_from_model() # nnz 463 rank 22 avg 21.0
+
+    # from theseus.bigg import download_model
+    # model = download_model('e_coli_core')
+    # model = add_pool_reaction(
+    #     model, 'POOL_h_c_e',
+    #     {'h[c]': -1, 'h[e]': 1} # nnz 349 rank 23 avg22 15.8
+    # )
+    # model = add_pool_reaction(
+    #     model, 'POOL_nadh_nad',
+    #     {'nadh[c]': -1, 'nad[c]': 1, 'h[c]': 1} # nnz 335 rank 24 avg22 15.2
+    # )
+    # model = add_pool_reaction(
+    #     model, 'POOL_nadph_nadp',
+    #     {'nadph[c]': -1, 'nadp[c]': 1, 'h[c]': 1} # nnz 337 rank 25 avg22 15.3
+    # )
+    # model = add_pool_reaction(
+    #     model, 'POOL_atp_adp',
+    #     {'atp[c]': -1, 'h2o[c]': -1, 'adp[c]': 1, 'pi[c]': 1, 'h[c]': 1} # nnz 333 rank 26 avg22 15.1
+    # )
+
+    model = add_pool_reaction(model, 'POOL_h_e', {'h[e]': 1})
+    model = add_pool_reaction(model, 'POOL_h_c', {'h[c]': 1}) # nnz 360 rank 24 avg 15
+    model = add_pool_reaction(model, 'POOL_nadh_c', {'nadh[c]': 1})
+    model = add_pool_reaction(model, 'POOL_nad_c', {'nad[c]': 1}) # nnz 352 rank 25 avg 14.1
+    model = add_pool_reaction(model, 'POOL_nadph_c', {'nadph[c]': 1})
+    model = add_pool_reaction(model, 'POOL_nadp_c', {'nadp[c]': 1}) # nnz 356 rank 26 avg 13.7
+    model = add_pool_reaction(model, 'POOL_adp_c', {'adp[c]': 1})
+    model = add_pool_reaction(model, 'POOL_pi_c', {'pi[c]': 1})
+    model = add_pool_reaction(model, 'POOL_h2o_c', {'h2o[c]': 1})
+    model = add_pool_reaction(model, 'POOL_atp_c', {'atp[c]': 1}) # nnz 359 rank 28 avg 12.8
+
     S = model.to_array_based_model().S
     start = time()
     solved_fluxes = minspan(model, cores=1, verbose=True)
@@ -528,4 +586,13 @@ if __name__ == "__main__":
     print "nnz", nnz(solved_fluxes)
     print "rank", matrix_rank(solved_fluxes)
     print "max(S * v) =", abs(S * solved_fluxes).max()
-    #from IPython import embed; embed()
+
+    out_data = {}
+    import ipdb; ipdb.set_trace()
+    for i, _ in enumerate(solved_fluxes[0]):
+        out_data[i] = [model.reactions[j].id.replace('-', '__').replace('(', '_').replace(')', '')
+                       for j, a in enumerate(solved_fluxes)
+                       if a[i] != 0]
+    import json
+    with open('minspan_data.json', 'w') as f:
+        json.dump(out_data, f)
